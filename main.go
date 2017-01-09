@@ -60,7 +60,7 @@ var (
 	cacheFile    = kingpin.Flag("cache", "JSON file stores videos meta info").Short('c').OpenFile(os.O_CREATE|os.O_RDWR, 0600)
 	magnetFile   = kingpin.Flag("out", "File to store magnet links").Short('o').OpenFile(os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	actresses    = kingpin.Flag("actress", "List of JavLibrary actress ID").Short('a').Strings()
-	requestMutex = make(chan struct{}, requestLimit)
+	requestMutex = make(chan bool, requestLimit)
 	cacheMutex   = new(sync.RWMutex)
 )
 
@@ -85,7 +85,7 @@ func cacheAddVideo(video *Video) {
 }
 
 func request(url string) (resp *http.Response, err error) {
-	requestMutex <- struct{}{}
+	requestMutex <- true
 	resp, err = http.Get(url)
 	<-requestMutex
 	if resp.StatusCode != 200 {
@@ -163,7 +163,7 @@ func parseSize(expr string) uint {
 
 func isValidResult(video *Video, result *nyaaResult) bool {
 	transf := regexp.MustCompile("[-\\s]+")
-	re, err := regexp.Compile(transf.ReplaceAllString(video.Id, "\\s*[-\\s0]*\\s*"))
+	re, err := regexp.Compile("(?i)" + transf.ReplaceAllString(video.Id, "\\s*[-\\s0]*\\s*"))
 	if err != nil {
 		// We cannot construct a validator, so we assume it's valid
 		return true
@@ -172,8 +172,8 @@ func isValidResult(video *Video, result *nyaaResult) bool {
 }
 
 func crawlTorrentPage(video *Video, torrents chan *Video, wg *sync.WaitGroup) {
-	defer func() { torrents <- video }()
 	defer wg.Done()
+	defer func() { torrents <- video }()
 
 	resp, err := request("https://sukebei.nyaa.se/?page=search&cats=8_30&sort=5&term=" + video.Id)
 	if err != nil {
