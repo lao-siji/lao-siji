@@ -61,18 +61,25 @@ var (
 	magnetFile   = kingpin.Flag("out", "File to store magnet links").Short('o').OpenFile(os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	actresses    = kingpin.Flag("actress", "List of JavLibrary actress ID").Short('a').Strings()
 	requestMutex = make(chan struct{}, requestLimit)
+	cacheMutex   = new(sync.RWMutex)
 )
 
 func cacheHasId(id string) (exists bool) {
+	cacheMutex.RLock()
 	_, exists = cache[id]
+	cacheMutex.RUnlock()
 	return
 }
 
 func cacheAddVideo(video *Video) {
+	cacheMutex.Lock()
 	cache[video.Id] = video
+	cacheMutex.Unlock()
 	if *cacheFile != nil {
 		(*cacheFile).Truncate(0)
+		cacheMutex.RLock()
 		cacheJson, _ := json.MarshalIndent(cache, "", "    ")
+		cacheMutex.RUnlock()
 		(*cacheFile).WriteAt(cacheJson, 0)
 	}
 }
@@ -249,7 +256,7 @@ func crawTorrent(videos chan *Video, torrents chan *Video) {
 	wg := new(sync.WaitGroup)
 	for v := range videos {
 		wg.Add(1)
-		crawlTorrentPage(v, torrents, wg)
+		go crawlTorrentPage(v, torrents, wg)
 	}
 	wg.Wait()
 	close(torrents)
