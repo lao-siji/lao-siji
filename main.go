@@ -88,7 +88,7 @@ func request(url string) (resp *http.Response, err error) {
 	requestMutex <- true
 	resp, err = http.Get(url)
 	<-requestMutex
-	if resp.StatusCode != 200 {
+	if err == nil && resp.StatusCode != 200 {
 		err = errors.New("Request failed: " + url +
 			"\nStatus code: " + strconv.Itoa(resp.StatusCode))
 	}
@@ -99,6 +99,7 @@ func crawlStarPage(uri string, videos chan *Video, wg *sync.WaitGroup) {
 	defer wg.Done()
 	resp, err := request(uri)
 	if err != nil {
+		fmt.Println(err.Error())
 		return
 	}
 
@@ -177,6 +178,7 @@ func crawlTorrentPage(video *Video, torrents chan *Video, wg *sync.WaitGroup) {
 
 	resp, err := request("https://sukebei.nyaa.se/?page=search&cats=8_30&sort=5&term=" + video.Id)
 	if err != nil {
+		fmt.Println(err.Error())
 		return
 	}
 
@@ -234,6 +236,7 @@ func crawlTorrentPage(video *Video, torrents chan *Video, wg *sync.WaitGroup) {
 
 	resp, err = request(best.TorrentURL)
 	if err != nil {
+		fmt.Println(err.Error())
 		return
 	}
 
