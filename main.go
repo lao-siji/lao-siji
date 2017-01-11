@@ -113,7 +113,7 @@ var (
 	cache        = make(videoCache)
 	cacheFile    = kingpin.Flag("cache", "JSON file stores videos meta info").Short('c').OpenFile(os.O_CREATE|os.O_RDWR, 0600)
 	magnetFile   = kingpin.Flag("out", "File to store magnet links").Short('o').OpenFile(os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	actresses    = kingpin.Flag("actress", "List of JavLibrary actress ID").Short('a').Strings()
+	actresses    = kingpin.Flag("actress", "List of JavLibrary actress ID").Required().Short('a').Strings()
 	requestMutex = make(chan bool, requestLimit)
 	cacheMutex   = new(sync.RWMutex)
 )
