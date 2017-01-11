@@ -29,11 +29,25 @@ type Video struct {
 	Size         uint
 }
 
+func (v Video) Magnet() string {
+	return "magnet:?xt=urn:btih:" + v.InfoHash + "&dn=" + url.QueryEscape(v.Id)
+}
+
 type nyaaResult struct {
 	Title      string
 	TorrentURL string
 	Size       uint
 	IsTrusted  bool
+}
+
+func (result *nyaaResult) isValid(video *Video) bool {
+	transf := regexp.MustCompile("[-\\s]+")
+	re, err := regexp.Compile("(?i)" + transf.ReplaceAllString(video.Id, "\\s*[-\\s0]*\\s*"))
+	if err != nil {
+		// We cannot construct a validator, so we assume it's valid
+		return true
+	}
+	return re.MatchString(result.Title)
 }
 
 type BySize []*nyaaResult
@@ -52,6 +66,46 @@ func (s BySize) Less(i, j int) bool {
 
 type videoCache map[string]*Video
 
+func (cache videoCache) readIn() error {
+	if *cacheFile != nil {
+		fi, err := (*cacheFile).Stat()
+		if err != nil {
+			return errors.New("Error accessing cache file")
+		}
+		if fi.Size() > 0 {
+			err = json.NewDecoder(*cacheFile).Decode(&cache)
+			if err != nil {
+				return errors.New("Failed to load cache file")
+			}
+		}
+	}
+	return nil
+}
+
+func (cache videoCache) writeOut() {
+	if *cacheFile != nil {
+		(*cacheFile).Truncate(0)
+		cacheMutex.RLock()
+		cacheJson, _ := json.MarshalIndent(cache, "", "    ")
+		cacheMutex.RUnlock()
+		(*cacheFile).WriteAt(cacheJson, 0)
+	}
+}
+
+func (cache videoCache) hasId(id string) (exists bool) {
+	cacheMutex.RLock()
+	_, exists = cache[id]
+	cacheMutex.RUnlock()
+	return
+}
+
+func (cache videoCache) addVideo(video *Video) {
+	cacheMutex.Lock()
+	cache[video.Id] = video
+	cacheMutex.Unlock()
+	cache.writeOut()
+}
+
 const javBase = "http://www.javlibrary.com"
 const requestLimit = 20
 
@@ -63,26 +117,6 @@ var (
 	requestMutex = make(chan bool, requestLimit)
 	cacheMutex   = new(sync.RWMutex)
 )
-
-func cacheHasId(id string) (exists bool) {
-	cacheMutex.RLock()
-	_, exists = cache[id]
-	cacheMutex.RUnlock()
-	return
-}
-
-func cacheAddVideo(video *Video) {
-	cacheMutex.Lock()
-	cache[video.Id] = video
-	cacheMutex.Unlock()
-	if *cacheFile != nil {
-		(*cacheFile).Truncate(0)
-		cacheMutex.RLock()
-		cacheJson, _ := json.MarshalIndent(cache, "", "    ")
-		cacheMutex.RUnlock()
-		(*cacheFile).WriteAt(cacheJson, 0)
-	}
-}
 
 func request(url string) (resp *http.Response, err error) {
 	requestMutex <- true
@@ -113,13 +147,13 @@ func crawlStarPage(uri string, videos chan *Video, wg *sync.WaitGroup) {
 
 	doc.Find(".video").Each(func(i int, s *goquery.Selection) {
 		id := s.Find(".id").Text()
-		if !cacheHasId(id) {
+		if !cache.hasId(id) {
 			v := &Video{
 				Id:      id,
 				Title:   s.Find(".title").Text(),
 				Actress: actress,
 			}
-			cacheAddVideo(v)
+			cache.addVideo(v)
 			videos <- v
 		}
 	})
@@ -162,16 +196,6 @@ func parseSize(expr string) uint {
 	return uint(quantity * multiplier)
 }
 
-func isValidResult(video *Video, result *nyaaResult) bool {
-	transf := regexp.MustCompile("[-\\s]+")
-	re, err := regexp.Compile("(?i)" + transf.ReplaceAllString(video.Id, "\\s*[-\\s0]*\\s*"))
-	if err != nil {
-		// We cannot construct a validator, so we assume it's valid
-		return true
-	}
-	return re.MatchString(result.Title)
-}
-
 func crawlTorrentPage(video *Video, torrents chan *Video, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer func() { torrents <- video }()
@@ -198,7 +222,7 @@ func crawlTorrentPage(video *Video, torrents chan *Video, wg *sync.WaitGroup) {
 			Size:       parseSize(doc.Find(".viewtable .vtop").Last().Text()),
 			IsTrusted:  doc.Find(".content").HasClass("trusted"),
 		}
-		if isValidResult(video, result) {
+		if result.isValid(video) {
 			results = append(results, result)
 		}
 	} else {
@@ -211,7 +235,7 @@ func crawlTorrentPage(video *Video, torrents chan *Video, wg *sync.WaitGroup) {
 				Size:       parseSize(s.Find(".tlistsize").Text()),
 				IsTrusted:  s.HasClass("trusted"),
 			}
-			if isValidResult(video, result) {
+			if result.isValid(video) {
 				results = append(results, result)
 			}
 		})
@@ -268,24 +292,10 @@ func crawTorrent(videos chan *Video, torrents chan *Video) {
 func init() {
 	// Auto-run before main
 	kingpin.Parse()
-
-	if *cacheFile != nil {
-		fi, err := (*cacheFile).Stat()
-		if err != nil {
-			log.Fatal("Error accessing cache file")
-		}
-
-		if fi.Size() > 0 {
-			err = json.NewDecoder(*cacheFile).Decode(&cache)
-			if err != nil {
-				log.Fatal("Failed to load cache file")
-			}
-		}
-	}
+	cache.readIn()
 }
 
 func main() {
-
 	ids := make(chan string)
 	videos := make(chan *Video)
 	go crawlStar(ids, videos)
@@ -300,8 +310,9 @@ func main() {
 	for v := range torrents {
 		fmt.Printf("%q\n", *v)
 		if *magnetFile != nil && v.InfoHash != "" {
-			(*magnetFile).WriteString("magnet:?xt=urn:btih:" + v.InfoHash + "&dn=" + url.QueryEscape(v.Id) + "\n")
+			(*magnetFile).WriteString(v.Magnet() + "\n")
 		}
 	}
 
+	cache.writeOut()
 }
