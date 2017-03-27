@@ -3,9 +3,11 @@
 ## Example Usage
 
 ```shell
-go run ./main.go -c store.json -o magnets.txt -a afdss -a azefi -a ayqag -a pqaq -a a5nvq -a ayera
+go run main.go infohash.go -c cache.json -o magnets.txt -a afdss -a azefi -a ayqag -a pqaq -a a5nvq -a ayera -m aq4q
 ```
 
 * `-c` specifies a permanent JSON cache file for meta data output
 * `-o` specifies a TXT output file for the obtained magnet links
 * `-a` list of JavLibrary actress IDs to crawl
+* `-m` list of JavLibrary maker IDs to crawl
+* `-l` list of JavLibrary label IDs to crawl

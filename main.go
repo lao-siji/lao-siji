@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"sync"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/cnt0/gotrntmetainfoparser"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -113,7 +111,9 @@ var (
 	cache        = make(videoCache)
 	cacheFile    = kingpin.Flag("cache", "JSON file stores videos meta info").Short('c').OpenFile(os.O_CREATE|os.O_RDWR, 0600)
 	magnetFile   = kingpin.Flag("out", "File to store magnet links").Short('o').OpenFile(os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-	actresses    = kingpin.Flag("actress", "List of JavLibrary actress ID").Required().Short('a').Strings()
+	actresses    = kingpin.Flag("actress", "List of JavLibrary actress ID").Short('a').Strings()
+	labels       = kingpin.Flag("label", "List of JavLibrary label ID").Short('l').Strings()
+	makers       = kingpin.Flag("maker", "List of JavLibrary maker ID").Short('m').Strings()
 	requestMutex = make(chan bool, requestLimit)
 	cacheMutex   = new(sync.RWMutex)
 )
@@ -129,7 +129,8 @@ func request(url string) (resp *http.Response, err error) {
 	return
 }
 
-func crawlStarPage(uri string, videos chan *Video, wg *sync.WaitGroup) {
+func crawlJavPage(uri string, videos chan *Video, wg *sync.WaitGroup) {
+	wg.Add(1)
 	defer wg.Done()
 	resp, err := request(uri)
 	if err != nil {
@@ -142,7 +143,7 @@ func crawlStarPage(uri string, videos chan *Video, wg *sync.WaitGroup) {
 		log.Fatal(err)
 	}
 
-	re := regexp.MustCompile("^\\s*(.*?)\\s+所演出的影片$")
+	re := regexp.MustCompile("^\\s*(.*?)\\s+(所演出的影片|所发行的影片|所制作的影片)$")
 	actress := re.FindStringSubmatch(doc.Find(".boxtitle").Text())[1]
 
 	doc.Find(".video").Each(func(i int, s *goquery.Selection) {
@@ -161,19 +162,8 @@ func crawlStarPage(uri string, videos chan *Video, wg *sync.WaitGroup) {
 	nextPage := doc.Find(".page.next")
 	if nextPage.Length() > 0 {
 		rel, _ := nextPage.Attr("href")
-		wg.Add(1)
-		crawlStarPage(javBase+rel, videos, wg)
+		crawlJavPage(javBase+rel, videos, wg)
 	}
-}
-
-func crawlStar(sids chan string, videos chan *Video) {
-	wg := new(sync.WaitGroup)
-	for sid := range sids {
-		wg.Add(1)
-		go crawlStarPage(javBase+"/cn/vl_star.php?s="+sid, videos, wg)
-	}
-	wg.Wait()
-	close(videos)
 }
 
 func parseSize(expr string) uint {
@@ -264,18 +254,14 @@ func crawlTorrentPage(video *Video, torrents chan *Video, wg *sync.WaitGroup) {
 		return
 	}
 
-	meta, err := gotrntmetainfoparser.Decode(resp.Body)
+	meta, err := DecodeTorrent(resp.Body)
 	if err != nil {
 		return
 	}
 
-	infoHashBytes := []byte(meta.InfoHash)
-	infoHash := make([]byte, hex.EncodedLen(len(infoHashBytes)))
-	hex.Encode(infoHash, infoHashBytes)
-
 	video.TorrentURL = best.TorrentURL
 	video.TorrnetTitle = meta.Info.Name
-	video.InfoHash = string(infoHash)
+	video.InfoHash = fmt.Sprintf("%X", meta.InfoHash)
 	video.Size = best.Size
 }
 
@@ -296,13 +282,25 @@ func init() {
 }
 
 func main() {
-	ids := make(chan string)
 	videos := make(chan *Video)
-	go crawlStar(ids, videos)
-	for _, id := range *actresses {
-		ids <- id
+	wg := new(sync.WaitGroup)
+
+	for _, actress := range *actresses {
+		go crawlJavPage(javBase+"/cn/vl_star.php?s="+actress, videos, wg)
 	}
-	close(ids)
+
+	for _, label := range *labels {
+		go crawlJavPage(javBase+"/cn/vl_label.php?l="+label, videos, wg)
+	}
+
+	for _, maker := range *makers {
+		go crawlJavPage(javBase+"/cn/vl_maker.php?m="+maker, videos, wg)
+	}
+
+	go func(wg *sync.WaitGroup) {
+		wg.Wait()
+		close(videos)
+	}(wg)
 
 	torrents := make(chan *Video)
 	go crawTorrent(videos, torrents)
